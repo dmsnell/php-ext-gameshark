@@ -6,3 +6,6 @@
 	path = wordpress-develop
 	url = https://github.com/WordPress/wordpress-develop.git
 	branch = trunk
+[submodule "extension"]
+	path = extension
+	url = ../php-ext-gameshark-extension

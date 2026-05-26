@@ -1,0 +1,8 @@
+[submodule "php-src"]
+	path = php-src
+	url = https://github.com/php/php-src.git
+	branch = master
+[submodule "wordpress-develop"]
+	path = wordpress-develop
+	url = https://github.com/WordPress/wordpress-develop.git
+	branch = trunk

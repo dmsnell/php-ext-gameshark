@@ -482,9 +482,14 @@ GAMESHARK_INVARIANTS_WARN_BUILTINS=0
 
 ## Unused Runtime Coverage Mode
 
-Unused mode records userland declarations created during a run and reports
-which of those declarations had no matching runtime access observed. This is a
-coverage signal for loaded code, not proof that code is dead.
+Unused mode records userland declarations created during instrumented PHP
+execution and tracks whether those declarations are accessed at runtime. It is
+designed for questions like "which loaded functions, methods, classes,
+constants, or included files were not observed in practice?"
+
+This is runtime coverage, not proof of dead code. A declaration listed as
+unused means it was loaded during instrumented requests but no matching access
+was observed in those sampled requests.
 
 Enable it with:
 
@@ -500,6 +505,22 @@ GAMESHARK_DB="$DB" \
   -r 'echo gameshark_unused_report();'
 ```
 
+Each instrumented CLI invocation or web request writes one completed unused run
+into the SQLite database. Reuse the same `GAMESHARK_DB` for all requests that
+belong to the same observation window.
+
+### Per-request report
+
+`gameshark_unused_report()` reports one completed unused run. By default it
+selects the latest completed run in the database. Pass a run id as the second
+argument to inspect an earlier run:
+
+```sh
+GAMESHARK_DB="$DB" \
+  "$PHP" -d extension="$GAMESHARK_EXT" \
+  -r 'echo gameshark_unused_report("json", 1);'
+```
+
 JSON output is available for automation:
 
 ```sh
@@ -508,32 +529,117 @@ GAMESHARK_DB="$DB" \
   -r 'echo gameshark_unused_report("json");'
 ```
 
-By default `gameshark_unused_report()` selects the latest completed unused run
-in the database. Pass a run id as the second argument to inspect an earlier
-run:
+The built-in human report is optimized for quick interactive inspection of a
+single run. For multi-request coverage, use the aggregate report.
+
+### Aggregate report
+
+The aggregate helper merges all completed unused runs in one SQLite database
+into a single coverage profile:
 
 ```sh
-GAMESHARK_DB="$DB" \
-  "$PHP" -d extension="$GAMESHARK_EXT" \
-  -r 'echo gameshark_unused_report("json", 1);'
+"$PHP" -d memory_limit=-1 \
+  scripts/wp-unused-aggregate-report.php "$DB" text \
+  > unused-aggregate.txt
+
+GAMESHARK_COLOR=always "$PHP" -d memory_limit=-1 \
+  scripts/wp-unused-aggregate-report.php "$DB" text \
+  > unused-aggregate-color.txt
+
+"$PHP" -d memory_limit=-1 \
+  scripts/wp-unused-aggregate-report.php "$DB" json \
+  > unused-aggregate.json
 ```
 
-The report includes uncalled functions, uncalled concrete methods, classes
-with no `new` opcode observed, global constants without a read observed, and
-class constants without a successful read observed. Direct constant fetches and
-`defined()` checks are tracked separately as pre-dispatch observations, but do
-not count as successful reads. The human text report shows the first 50 rows in
-each section; use JSON or array output for complete untruncated data.
-Opcode-derived observations are best effort: dynamic class names, dynamic
-constant names, optimizer-folded constants, and namespace fallback constants can
-be under-reported or reported with caveats.
+View the colorized full report with:
+
+```sh
+less -R unused-aggregate-color.txt
+```
+
+The aggregate text and JSON reports are complete; they do not cap each section
+to a preview size. Large databases can take time to report, so run aggregate
+reporting outside the request path.
+
+### Production sampling walkthrough
+
+Unused mode is useful when you cannot instrument every production request, but
+you can sample some real traffic over time:
+
+1. Build `gameshark.so` for the exact PHP build that will load it.
+2. Create a persistent SQLite path outside the application deploy directory.
+   Replace `www-data` with the user that runs the sampled PHP workers:
+
+   ```sh
+   sudo install -d -o www-data -g www-data /var/lib/gameshark
+   sudo -u www-data touch /var/lib/gameshark/unused-production.sqlite
+   ```
+
+3. Enable the extension and unused mode only for a sampled slice of traffic.
+   Prefer a dedicated PHP-FPM pool, canary host, route-level sampling rule, or
+   temporary worker group rather than all production workers:
+
+   ```ini
+   extension=/path/to/gameshark.so
+   gameshark.unused=1
+   ```
+
+   Configure `GAMESHARK_DB` in that sampled worker's environment, for example
+   with an FPM pool `env[]` entry or a service-manager environment setting:
+
+   ```ini
+   env[GAMESHARK_DB] = /var/lib/gameshark/unused-production.sqlite
+   ```
+
+4. Send only selected production requests through that instrumented pool or
+   host. Every sampled request appends another completed run into the same
+   database.
+5. Generate aggregate reports periodically from a shell, cron job, or offline
+   copy of the database. Do not generate reports in the production request
+   path.
+6. Compare aggregate reports over time. As more diverse traffic is sampled, the
+   unobserved set should shrink toward declarations that are rarely or never
+   reached in practice.
 
 For web SAPIs, the request path is recorded without the query string by
-default. To store the full request URI and query string, opt in explicitly:
+default. Keep that default for production unless query strings are necessary
+for the investigation. To store the full request URI and query string, opt in
+explicitly:
 
 ```sh
 GAMESHARK_UNUSED_CAPTURE_QUERY=1
 ```
+
+### Interpreting results
+
+The report includes uncalled functions, uncalled concrete methods, classes
+with no `new` opcode observed, constants without value access observed, and
+included files whose declarations were not accessed. Direct constant syntax such
+as `ABSPATH` or `SomeClass::SETTING` counts as value access, as does
+`constant('NAME')`. `defined()` checks are tracked as probes only; they do not
+count as value access. The legacy JSON keys named `*_without_read_observed`
+remain as aliases for compatibility, but new code should prefer
+`*_without_value_access_observed`.
+
+For production sampling, read unused-mode output probabilistically. A function
+that is unobserved after ten sampled requests is weak evidence; a function that
+is unobserved after days of representative traffic is stronger evidence. A
+declaration in a file where sibling declarations were accessed is a stronger
+signal than a declaration in a file that was loaded but otherwise untouched.
+
+Opcode-derived observations are best effort: dynamic class names, dynamic
+constant names, optimizer-folded constants, and namespace fallback constants can
+be under-reported or reported with caveats. A direct constant fetch can be
+observed before PHP raises for an undefined constant, so the constant sections
+should be treated as runtime coverage signals rather than exact value-flow
+proof.
+
+Unused mode also records files compiled through `include`, `include_once`,
+`require`, and `require_once`. Files with declarations but no accessed
+declarations appear under `included_files_with_no_accessed_declarations`; files
+with no declarations appear under `included_files_without_declarations`. These
+file sections do not mean top-level code was side-effect free, only that no
+userland declarations from that file were later accessed in the measured run.
 
 ## Combining Modes
 
@@ -563,7 +669,7 @@ Environment variables:
 
 | Name | Meaning |
 | --- | --- |
-| `GAMESHARK_DB` | SQLite database path for differential or trace collection. |
+| `GAMESHARK_DB` | SQLite database path for differential, trace, or unused collection. |
 | `GAMESHARK_SIDE` | Differential side: `left` or `right`. |
 | `GAMESHARK_TRACE_VALUE` | String or number to trace through function arguments. |
 | `GAMESHARK_TRACE_ALLOW_PATTERN` | Rust regex allow-list for traced function or method names. |

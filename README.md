@@ -6,6 +6,7 @@ executions. It is intended for questions like:
 - Which user-defined PHP functions ran during one request but not another?
 - Where did this value travel through userland and built-in PHP calls?
 - Did a function or method violate a runtime pre-condition or post-condition?
+- Which userland declarations were loaded but never reached at runtime?
 
 The extension is loaded into PHP as `gameshark`. The C extension hooks PHP's
 runtime, while the Rust core stores run data and reports in SQLite.
@@ -14,15 +15,15 @@ runtime, while the Rust core stores run data and reports in SQLite.
 
 ### Supported targets
 
-- PHP 8.0 or newer.
+- PHP 8.2 or newer.
 - Linux and macOS.
 - Non-ZTS PHP builds.
 - Rust with `cargo`.
 - PHP development tools for the PHP binary that will load the extension:
   `phpize` and `php-config`.
 
-PHP 7.4 is not supported because this extension depends on PHP 8's Zend
-Observer API. Windows support is deferred.
+PHP 8.0, PHP 8.1, and PHP 7.4 are not supported because the extension now
+depends on PHP 8.2 declaration observer APIs. Windows support is deferred.
 
 ### Checkout
 
@@ -126,6 +127,7 @@ Useful helper functions:
 - `gameshark_db_path(): ?string`
 - `gameshark_compare(string $format = "text"): string|array`
 - `gameshark_trace_report(string $format = "text"): string|array`
+- `gameshark_unused_report(string $format = "text", ?int $run_id = null): string|array`
 - `gameshark_invariants_status(): array`
 
 Report formats:
@@ -478,6 +480,61 @@ or:
 GAMESHARK_INVARIANTS_WARN_BUILTINS=0
 ```
 
+## Unused Runtime Coverage Mode
+
+Unused mode records userland declarations created during a run and reports
+which of those declarations had no matching runtime access observed. This is a
+coverage signal for loaded code, not proof that code is dead.
+
+Enable it with:
+
+```sh
+DB=/tmp/gameshark-unused.sqlite
+
+GAMESHARK_DB="$DB" \
+GAMESHARK_UNUSED=1 \
+  "$PHP" -d extension="$GAMESHARK_EXT" script.php
+
+GAMESHARK_DB="$DB" \
+  "$PHP" -d extension="$GAMESHARK_EXT" \
+  -r 'echo gameshark_unused_report();'
+```
+
+JSON output is available for automation:
+
+```sh
+GAMESHARK_DB="$DB" \
+  "$PHP" -d extension="$GAMESHARK_EXT" \
+  -r 'echo gameshark_unused_report("json");'
+```
+
+By default `gameshark_unused_report()` selects the latest completed unused run
+in the database. Pass a run id as the second argument to inspect an earlier
+run:
+
+```sh
+GAMESHARK_DB="$DB" \
+  "$PHP" -d extension="$GAMESHARK_EXT" \
+  -r 'echo gameshark_unused_report("json", 1);'
+```
+
+The report includes uncalled functions, uncalled concrete methods, classes
+with no `new` opcode observed, global constants without a read observed, and
+class constants without a successful read observed. Direct constant fetches and
+`defined()` checks are tracked separately as pre-dispatch observations, but do
+not count as successful reads. The human text report shows the first 50 rows in
+each section; use JSON or array output for complete untruncated data.
+Opcode-derived observations are best effort: dynamic class names, dynamic
+constant names, optimizer-folded constants, and namespace fallback constants can
+be under-reported or reported with caveats.
+
+For web SAPIs, the request path is recorded without the query string by
+default. To store the full request URI and query string, opt in explicitly:
+
+```sh
+GAMESHARK_UNUSED_CAPTURE_QUERY=1
+```
+
 ## Combining Modes
 
 Differential and trace-value mode can run together:
@@ -515,6 +572,8 @@ Environment variables:
 | `GAMESHARK_INVARIANTS` | Enables invariant mode when truthy. |
 | `GAMESHARK_INVARIANTS_FILE` | Absolute path to the invariant PHP file. |
 | `GAMESHARK_INVARIANTS_WARN_BUILTINS` | Set to `0` to suppress built-in hook warnings. |
+| `GAMESHARK_UNUSED` | Enables unused runtime coverage mode when truthy. |
+| `GAMESHARK_UNUSED_CAPTURE_QUERY` | Set to `1` to store full request URI and query string. |
 
 INI settings:
 
@@ -524,6 +583,8 @@ INI settings:
 | `gameshark.invariants` | Enables invariant mode. |
 | `gameshark.invariants_file` | Absolute path to the invariant PHP file. |
 | `gameshark.invariants_warn_builtins` | Built-in hook warning control. |
+| `gameshark.unused` | Enables unused runtime coverage mode. |
+| `gameshark.unused_capture_query` | Stores full request URI and query string when truthy. |
 
 ## Development
 

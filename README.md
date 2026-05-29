@@ -49,6 +49,13 @@ The script runs `phpize`, configures the extension, builds the Rust static
 library with `cargo build --release --locked`, runs the PHPT suite, and then
 performs a small load/trace smoke test.
 
+By default only SQLite storage is compiled. To include MySQL/MariaDB and Redis
+support, build with:
+
+```sh
+GAMESHARK_BACKENDS=all PHP_CONFIG=/path/to/php-config scripts/build-unix.sh
+```
+
 If `phpize` is not next to `php-config`, set it explicitly:
 
 ```sh
@@ -125,9 +132,11 @@ Useful helper functions:
 - `gameshark_loaded(): bool`
 - `gameshark_side(): ?string`
 - `gameshark_db_path(): ?string`
+- `gameshark_storage_status(): array`
 - `gameshark_compare(string $format = "text"): string|array`
 - `gameshark_trace_report(string $format = "text"): string|array`
 - `gameshark_unused_report(string $format = "text", ?int $run_id = null): string|array`
+- `gameshark_unused_aggregate_report(string $format = "text", ?string $capture = null, ?int $since_run_id = null, ?int $until_run_id = null): string|array`
 - `gameshark_invariants_status(): array`
 
 Report formats:
@@ -174,6 +183,16 @@ GAMESHARK_DB="$DB" GAMESHARK_SIDE=right \
 GAMESHARK_DB="$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_compare();'
+```
+
+The modern equivalent is:
+
+```sh
+"$PHP" -d extension="$GAMESHARK_EXT" \
+  -d gameshark.storage=sqlite \
+  -d gameshark.dsn="sqlite:$DB" \
+  -d gameshark.side=left \
+  left.php
 ```
 
 JSON output:
@@ -534,22 +553,30 @@ single run. For multi-request coverage, use the aggregate report.
 
 ### Aggregate report
 
-The aggregate helper merges all completed unused runs in one SQLite database
-into a single coverage profile:
+`gameshark_unused_aggregate_report()` merges all completed unused runs for a
+capture into one coverage profile. It works with SQLite, MySQL/MariaDB, and
+Redis backends:
 
 ```sh
-"$PHP" -d memory_limit=-1 \
-  scripts/wp-unused-aggregate-report.php "$DB" text \
+"$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
+  -d gameshark.db="$DB" \
+  -r 'echo gameshark_unused_aggregate_report("text");' \
   > unused-aggregate.txt
 
-GAMESHARK_COLOR=always "$PHP" -d memory_limit=-1 \
-  scripts/wp-unused-aggregate-report.php "$DB" text \
+GAMESHARK_COLOR=always "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
+  -d gameshark.db="$DB" \
+  extension/scripts/gameshark-unused-aggregate-report.php text \
   > unused-aggregate-color.txt
 
-"$PHP" -d memory_limit=-1 \
-  scripts/wp-unused-aggregate-report.php "$DB" json \
+"$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
+  -d gameshark.db="$DB" \
+  extension/scripts/gameshark-unused-aggregate-report.php json \
   > unused-aggregate.json
 ```
+
+The older `scripts/wp-unused-aggregate-report.php <sqlite-db> <text|json>`
+helper remains available for SQLite databases and does not require loading the
+extension.
 
 View the colorized full report with:
 
@@ -566,13 +593,24 @@ reporting outside the request path.
 Unused mode is useful when you cannot instrument every production request, but
 you can sample some real traffic over time:
 
-1. Build `gameshark.so` for the exact PHP build that will load it.
-2. Create a persistent SQLite path outside the application deploy directory.
+1. Build `gameshark.so` for the exact PHP build that will load it. Use
+   `GAMESHARK_BACKENDS=all` when samples need to be merged from multiple hosts.
+2. For one host or a short-lived canary, create a persistent SQLite path outside
+   the application deploy directory.
    Replace `www-data` with the user that runs the sampled PHP workers:
 
    ```sh
    sudo install -d -o www-data -g www-data /var/lib/gameshark
    sudo -u www-data touch /var/lib/gameshark/unused-production.sqlite
+   ```
+
+   For a cluster, prefer MySQL/MariaDB with a dedicated Gameshark database and
+   set a stable capture name:
+
+   ```ini
+   gameshark.storage=mysql
+   gameshark.dsn=mysql://gameshark:secret@db.example.test:3306/gameshark
+   gameshark.capture=wp-prod-sample
    ```
 
 3. Enable the extension and unused mode only for a sampled slice of traffic.
@@ -584,8 +622,8 @@ you can sample some real traffic over time:
    gameshark.unused=1
    ```
 
-   Configure `GAMESHARK_DB` in that sampled worker's environment, for example
-   with an FPM pool `env[]` entry or a service-manager environment setting:
+   Configure storage in that sampled worker's environment, for example with an
+   FPM pool `env[]` entry or a service-manager environment setting:
 
    ```ini
    env[GAMESHARK_DB] = /var/lib/gameshark/unused-production.sqlite
@@ -663,12 +701,153 @@ Invariant mode can also run during a traced invocation. Hook callbacks are
 guarded against recursive instrumentation, so calls made by the hook itself do
 not recursively trigger more invariant hooks.
 
+## Storage Backends
+
+SQLite remains the default and is the best local/debug backend. MySQL/MariaDB
+and Redis are available when the extension is built with
+`GAMESHARK_BACKENDS=all`.
+
+Common settings:
+
+```sh
+GAMESHARK_STORAGE=sqlite|mysql|redis
+GAMESHARK_DSN='sqlite:/tmp/gameshark.sqlite'
+GAMESHARK_CAPTURE=default
+```
+
+`gameshark.capture`/`GAMESHARK_CAPTURE` names a sampling stream. It must match
+`[A-Za-z0-9_.:-]{1,128}`. Reuse the same capture name for related production
+samples so successive requests merge into the same probabilistic coverage view.
+
+Storage precedence is:
+
+- non-empty INI settings beat environment variables for the same key.
+- `gameshark.dsn`/`GAMESHARK_DSN` beats split host/user/password fields.
+- `password_file` beats split password when no password is present in the DSN.
+- legacy `gameshark.db`/`GAMESHARK_DB` is a SQLite-only alias.
+
+Inspect the active interpretation with:
+
+```sh
+"$PHP" -d extension="$GAMESHARK_EXT" \
+  -d gameshark.dsn="sqlite:/tmp/gameshark.sqlite" \
+  -r 'var_export(gameshark_storage_status());'
+```
+
+### MySQL/MariaDB
+
+Build with all backends, then configure either a DSN:
+
+```sh
+GAMESHARK_STORAGE=mysql
+GAMESHARK_DSN='mysql://gameshark:secret@db.example.test:3306/gameshark'
+GAMESHARK_CAPTURE=wp-prod-sample
+```
+
+or split settings:
+
+```sh
+GAMESHARK_STORAGE=mysql
+GAMESHARK_MYSQL_HOST=db.example.test
+GAMESHARK_MYSQL_PORT=3306
+GAMESHARK_MYSQL_DATABASE=gameshark
+GAMESHARK_MYSQL_USERNAME=gameshark
+GAMESHARK_MYSQL_PASSWORD_FILE=/run/secrets/gameshark-db-password
+GAMESHARK_MYSQL_SCHEMA_MODE=validate
+```
+
+`schema_mode=validate` is the default. Use `schema_mode=auto` only for a
+disposable Gameshark-owned database. Do not point Gameshark at a shared
+WordPress database.
+
+Minimal schema:
+
+```sql
+CREATE TABLE schema_meta (
+  `key` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL PRIMARY KEY,
+  `value` VARCHAR(191) CHARACTER SET ascii COLLATE ascii_bin NOT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+INSERT INTO schema_meta (`key`, `value`) VALUES ('schema_version', '1');
+
+CREATE TABLE diff_runs (
+  run_id BIGINT NOT NULL PRIMARY KEY,
+  capture VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  side VARCHAR(5) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT NULL,
+  php_version VARCHAR(64),
+  sapi VARCHAR(64),
+  pid BIGINT,
+  script_filename TEXT,
+  payload_json LONGTEXT NOT NULL,
+  KEY diff_capture_side_finished (capture, side, status, finished_at, run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE trace_runs (
+  run_id BIGINT NOT NULL PRIMARY KEY,
+  capture VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT NULL,
+  trace_value LONGTEXT,
+  trace_value_kind VARCHAR(32),
+  php_version VARCHAR(64),
+  sapi VARCHAR(64),
+  pid BIGINT,
+  script_filename TEXT,
+  payload_json LONGTEXT NOT NULL,
+  KEY trace_capture_started (capture, status, started_at, run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+
+CREATE TABLE unused_runs (
+  run_id BIGINT NOT NULL PRIMARY KEY,
+  capture VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  started_at BIGINT NOT NULL,
+  finished_at BIGINT NULL,
+  php_version VARCHAR(64),
+  sapi VARCHAR(64),
+  pid BIGINT,
+  script_filename TEXT,
+  request_path TEXT,
+  payload_json LONGTEXT NOT NULL,
+  KEY unused_capture_finished (capture, status, finished_at, run_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin;
+```
+
+Grant only what the extension needs:
+
+```sql
+CREATE USER 'gameshark'@'%' IDENTIFIED BY 'secret';
+GRANT SELECT, INSERT, UPDATE, DELETE, CREATE ON gameshark.* TO 'gameshark'@'%';
+```
+
+### Redis
+
+Redis is for short-lived debugging and CI sampling, not durable production
+coverage. It writes namespaced keys with TTLs and no broad `KEYS`/`SCAN`.
+
+```sh
+GAMESHARK_STORAGE=redis
+GAMESHARK_DSN='redis://redis.example.test:6379/4'
+GAMESHARK_REDIS_KEY_PREFIX=gameshark:wp
+GAMESHARK_REDIS_TTL=3600
+```
+
+`rediss://` is accepted by builds compiled with `GAMESHARK_BACKENDS=all`.
+Redis Cluster and Redis Unix sockets are not supported in this version.
+
 ## Configuration Reference
 
 Environment variables:
 
 | Name | Meaning |
 | --- | --- |
+| `GAMESHARK_STORAGE` | `sqlite`, `mysql`, or `redis`. |
+| `GAMESHARK_DSN` | Backend DSN; schemes are `sqlite:`, `mysql://`, `redis://`, and `rediss://`. |
+| `GAMESHARK_CAPTURE` | Sampling stream name; default is `default`. |
 | `GAMESHARK_DB` | SQLite database path for differential, trace, or unused collection. |
 | `GAMESHARK_SIDE` | Differential side: `left` or `right`. |
 | `GAMESHARK_TRACE_VALUE` | String or number to trace through function arguments. |
@@ -680,17 +859,27 @@ Environment variables:
 | `GAMESHARK_INVARIANTS_WARN_BUILTINS` | Set to `0` to suppress built-in hook warnings. |
 | `GAMESHARK_UNUSED` | Enables unused runtime coverage mode when truthy. |
 | `GAMESHARK_UNUSED_CAPTURE_QUERY` | Set to `1` to store full request URI and query string. |
+| `GAMESHARK_MYSQL_*` | Split MySQL settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `SOCKET`, `SSL_MODE`, `SCHEMA_MODE`, and timeout keys. |
+| `GAMESHARK_REDIS_*` | Split Redis settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `KEY_PREFIX`, `TTL`, and timeout keys. |
 
 INI settings:
 
 | Name | Meaning |
 | --- | --- |
+| `gameshark.storage` | `sqlite`, `mysql`, or `redis`. |
+| `gameshark.dsn` | Backend DSN. |
+| `gameshark.capture` | Sampling stream name. |
+| `gameshark.db` | SQLite database path; legacy alias. |
+| `gameshark.side` | Differential side. |
+| `gameshark.trace_value` | Value to trace. |
 | `gameshark.trace_allow_pattern` | Same as `GAMESHARK_TRACE_ALLOW_PATTERN`; takes precedence when non-empty. |
 | `gameshark.invariants` | Enables invariant mode. |
 | `gameshark.invariants_file` | Absolute path to the invariant PHP file. |
 | `gameshark.invariants_warn_builtins` | Built-in hook warning control. |
 | `gameshark.unused` | Enables unused runtime coverage mode. |
 | `gameshark.unused_capture_query` | Stores full request URI and query string when truthy. |
+| `gameshark.mysql.*` | Split MySQL settings matching the environment names above. |
+| `gameshark.redis.*` | Split Redis settings matching the environment names above. |
 
 ## Development
 

@@ -161,7 +161,7 @@ The sides are named `left` and `right` to avoid implying ordering.
 
 Set:
 
-- `GAMESHARK_DB=/path/to/run.sqlite`
+- `GAMESHARK_DSN=sqlite:/path/to/run.sqlite`
 - `GAMESHARK_SIDE=left` or `GAMESHARK_SIDE=right`
 
 When both are set, `gameshark` counts user-defined PHP function and method
@@ -174,13 +174,13 @@ Example:
 DB=/tmp/gameshark-diff.sqlite
 rm -f "$DB" "$DB-shm" "$DB-wal"
 
-GAMESHARK_DB="$DB" GAMESHARK_SIDE=left \
+GAMESHARK_DSN="sqlite:$DB" GAMESHARK_SIDE=left \
   "$PHP" -d extension="$GAMESHARK_EXT" left.php
 
-GAMESHARK_DB="$DB" GAMESHARK_SIDE=right \
+GAMESHARK_DSN="sqlite:$DB" GAMESHARK_SIDE=right \
   "$PHP" -d extension="$GAMESHARK_EXT" right.php
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_compare();'
 ```
@@ -198,7 +198,7 @@ The modern equivalent is:
 JSON output:
 
 ```sh
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_compare("json");'
 ```
@@ -208,19 +208,19 @@ WordPress-shaped example:
 ```sh
 DB=/tmp/wp-render-vs-rest.sqlite
 
-GAMESHARK_DB="$DB" GAMESHARK_SIDE=left \
+GAMESHARK_DSN="sqlite:$DB" GAMESHARK_SIDE=left \
   "$PHP" -d extension="$GAMESHARK_EXT" -S 127.0.0.1:8888 -t wordpress-develop/src
 
 # In another shell, exercise the normal page render.
 curl -s 'http://127.0.0.1:8888/?p=1' >/dev/null
 
 # Stop the server, then run the right side and exercise REST.
-GAMESHARK_DB="$DB" GAMESHARK_SIDE=right \
+GAMESHARK_DSN="sqlite:$DB" GAMESHARK_SIDE=right \
   "$PHP" -d extension="$GAMESHARK_EXT" -S 127.0.0.1:8888 -t wordpress-develop/src
 
 curl -s 'http://127.0.0.1:8888/wp-json/wp/v2/posts/1?context=view' >/dev/null
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_compare();'
 ```
@@ -233,7 +233,7 @@ differential mode.
 
 Set:
 
-- `GAMESHARK_DB=/path/to/trace.sqlite`
+- `GAMESHARK_DSN=sqlite:/path/to/trace.sqlite`
 - `GAMESHARK_TRACE_VALUE=value`
 
 Strings are matched by substring. Numeric trace values match numeric arguments
@@ -247,14 +247,14 @@ Example:
 DB=/tmp/gameshark-trace.sqlite
 rm -f "$DB" "$DB-shm" "$DB-wal"
 
-GAMESHARK_DB="$DB" GAMESHARK_TRACE_VALUE='needle' \
+GAMESHARK_DSN="sqlite:$DB" GAMESHARK_TRACE_VALUE='needle' \
   "$PHP" -d extension="$GAMESHARK_EXT" -r '
     function inner($value) {}
     function outer($value) { inner(["wrapped" => "prefix " . $value]); }
     outer("needle");
   '
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_trace_report();'
 ```
@@ -262,7 +262,7 @@ GAMESHARK_DB="$DB" \
 Untruncated JSON output:
 
 ```sh
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_trace_report("json");'
 ```
@@ -300,12 +300,12 @@ Example:
 DB=/tmp/gameshark-filtered-trace.sqlite
 rm -f "$DB" "$DB-shm" "$DB-wal"
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
 GAMESHARK_TRACE_VALUE='<b>needle</b>' \
 GAMESHARK_TRACE_ALLOW_PATTERN='^(?:preg_match|wp_kses|wpdb::prepare)$' \
   "$PHP" -d extension="$GAMESHARK_EXT" app.php
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_trace_report();'
 ```
@@ -337,7 +337,7 @@ Example:
 DB=/tmp/gameshark-transform-trace.sqlite
 rm -f "$DB" "$DB-shm" "$DB-wal"
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
 GAMESHARK_TRACE_VALUE="O'Reilly" \
 GAMESHARK_TRACE_FOLLOW_TRANSFORMS=1 \
 "$PHP" -d extension="$GAMESHARK_EXT" <<'PHP'
@@ -351,7 +351,7 @@ $sql = escape_sql("O'Reilly");
 sink($sql);
 PHP
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_trace_report("json");'
 ```
@@ -365,18 +365,16 @@ not followed.
 Invariant mode attaches PHP callbacks to specific functions or methods. Hooks
 can log, assert, collect state, or throw exceptions to stop the running script.
 
-Enable it with either environment variables:
+Enable it with an environment variable:
 
 ```sh
-GAMESHARK_INVARIANTS=1
-GAMESHARK_INVARIANTS_FILE=/absolute/path/to/invariants.php
+GAMESHARK_INVARIANTS=/absolute/path/to/invariants.php
 ```
 
-or INI settings:
+or an INI setting:
 
 ```sh
--d gameshark.invariants=1
--d gameshark.invariants_file=/absolute/path/to/invariants.php
+-d gameshark.invariants=/absolute/path/to/invariants.php
 ```
 
 The invariant file must return a zero-indexed list of specs. Each spec has:
@@ -468,8 +466,7 @@ Run with invariant mode:
 ```sh
 "$PHP" \
   -d extension="$GAMESHARK_EXT" \
-  -d gameshark.invariants=1 \
-  -d gameshark.invariants_file=/tmp/gameshark-invariants.php \
+  -d gameshark.invariants=/tmp/gameshark-invariants.php \
   app.php
 ```
 
@@ -515,17 +512,17 @@ Enable it with:
 ```sh
 DB=/tmp/gameshark-unused.sqlite
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
 GAMESHARK_UNUSED=1 \
   "$PHP" -d extension="$GAMESHARK_EXT" script.php
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_unused_report();'
 ```
 
 Each instrumented CLI invocation or web request writes one completed unused run
-into the SQLite database. Reuse the same `GAMESHARK_DB` for all requests that
+into the SQLite database. Reuse the same `GAMESHARK_DSN` for all requests that
 belong to the same observation window.
 
 ### Per-request report
@@ -535,7 +532,7 @@ selects the latest completed run in the database. Pass a run id as the second
 argument to inspect an earlier run:
 
 ```sh
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_unused_report("json", 1);'
 ```
@@ -543,7 +540,7 @@ GAMESHARK_DB="$DB" \
 JSON output is available for automation:
 
 ```sh
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_unused_report("json");'
 ```
@@ -559,24 +556,20 @@ Redis backends:
 
 ```sh
 "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
-  -d gameshark.db="$DB" \
+  -d gameshark.dsn="sqlite:$DB" \
   -r 'echo gameshark_unused_aggregate_report("text");' \
   > unused-aggregate.txt
 
 GAMESHARK_COLOR=always "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
-  -d gameshark.db="$DB" \
+  -d gameshark.dsn="sqlite:$DB" \
   extension/scripts/gameshark-unused-aggregate-report.php text \
   > unused-aggregate-color.txt
 
 "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
-  -d gameshark.db="$DB" \
+  -d gameshark.dsn="sqlite:$DB" \
   extension/scripts/gameshark-unused-aggregate-report.php json \
   > unused-aggregate.json
 ```
-
-The older `scripts/wp-unused-aggregate-report.php <sqlite-db> <text|json>`
-helper remains available for SQLite databases and does not require loading the
-extension.
 
 View the colorized full report with:
 
@@ -626,7 +619,7 @@ you can sample some real traffic over time:
    FPM pool `env[]` entry or a service-manager environment setting:
 
    ```ini
-   env[GAMESHARK_DB] = /var/lib/gameshark/unused-production.sqlite
+   env[GAMESHARK_DSN] = sqlite:/var/lib/gameshark/unused-production.sqlite
    ```
 
 4. Send only selected production requests through that instrumented pool or
@@ -655,9 +648,7 @@ with no `new` opcode observed, constants without value access observed, and
 included files whose declarations were not accessed. Direct constant syntax such
 as `ABSPATH` or `SomeClass::SETTING` counts as value access, as does
 `constant('NAME')`. `defined()` checks are tracked as probes only; they do not
-count as value access. The legacy JSON keys named `*_without_read_observed`
-remain as aliases for compatibility, but new code should prefer
-`*_without_value_access_observed`.
+count as value access.
 
 For production sampling, read unused-mode output probabilistically. A function
 that is unobserved after ten sampled requests is weak evidence; a function that
@@ -687,12 +678,12 @@ Differential and trace-value mode can run together:
 DB=/tmp/gameshark-combined.sqlite
 rm -f "$DB" "$DB-shm" "$DB-wal"
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
 GAMESHARK_SIDE=left \
 GAMESHARK_TRACE_VALUE='needle' \
   "$PHP" -d extension="$GAMESHARK_EXT" script.php
 
-GAMESHARK_DB="$DB" \
+GAMESHARK_DSN="sqlite:$DB" \
   "$PHP" -d extension="$GAMESHARK_EXT" \
   -r 'echo gameshark_compare(); echo gameshark_trace_report();'
 ```
@@ -724,7 +715,6 @@ Storage precedence is:
 - non-empty INI settings beat environment variables for the same key.
 - `gameshark.dsn`/`GAMESHARK_DSN` beats split host/user/password fields.
 - `password_file` beats split password when no password is present in the DSN.
-- legacy `gameshark.db`/`GAMESHARK_DB` is a SQLite-only alias.
 
 Inspect the active interpretation with:
 
@@ -848,14 +838,12 @@ Environment variables:
 | `GAMESHARK_STORAGE` | `sqlite`, `mysql`, or `redis`. |
 | `GAMESHARK_DSN` | Backend DSN; schemes are `sqlite:`, `mysql://`, `redis://`, and `rediss://`. |
 | `GAMESHARK_CAPTURE` | Sampling stream name; default is `default`. |
-| `GAMESHARK_DB` | SQLite database path for differential, trace, or unused collection. |
 | `GAMESHARK_SIDE` | Differential side: `left` or `right`. |
 | `GAMESHARK_TRACE_VALUE` | String or number to trace through function arguments. |
 | `GAMESHARK_TRACE_ALLOW_PATTERN` | Rust regex allow-list for traced function or method names. |
 | `GAMESHARK_TRACE_FOLLOW_TRANSFORMS` | Enables transformed-value tracing when truthy. |
 | `GAMESHARK_COLOR` | `always`, `never`, or default auto color behavior. |
-| `GAMESHARK_INVARIANTS` | Enables invariant mode when truthy. |
-| `GAMESHARK_INVARIANTS_FILE` | Absolute path to the invariant PHP file. |
+| `GAMESHARK_INVARIANTS` | Absolute path to the invariant PHP hook file; enables invariant mode when set. |
 | `GAMESHARK_INVARIANTS_WARN_BUILTINS` | Set to `0` to suppress built-in hook warnings. |
 | `GAMESHARK_UNUSED` | Enables unused runtime coverage mode when truthy. |
 | `GAMESHARK_UNUSED_CAPTURE_QUERY` | Set to `1` to store full request URI and query string. |
@@ -869,12 +857,10 @@ INI settings:
 | `gameshark.storage` | `sqlite`, `mysql`, or `redis`. |
 | `gameshark.dsn` | Backend DSN. |
 | `gameshark.capture` | Sampling stream name. |
-| `gameshark.db` | SQLite database path; legacy alias. |
 | `gameshark.side` | Differential side. |
 | `gameshark.trace_value` | Value to trace. |
 | `gameshark.trace_allow_pattern` | Same as `GAMESHARK_TRACE_ALLOW_PATTERN`; takes precedence when non-empty. |
-| `gameshark.invariants` | Enables invariant mode. |
-| `gameshark.invariants_file` | Absolute path to the invariant PHP file. |
+| `gameshark.invariants` | Absolute path to the invariant PHP hook file; enables invariant mode when set. |
 | `gameshark.invariants_warn_builtins` | Built-in hook warning control. |
 | `gameshark.unused` | Enables unused runtime coverage mode. |
 | `gameshark.unused_capture_query` | Stores full request URI and query string when truthy. |

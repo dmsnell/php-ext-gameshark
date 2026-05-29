@@ -85,7 +85,7 @@ write_manifest() {
   "db_user": "$(json_escape "$DB_USER")",
   "db_host": "127.0.0.1",
   "php_server_pid": ${PHP_PID:-null},
-  "php_server_command": "$(json_escape "GAMESHARK_DB=$UNUSED_DB GAMESHARK_UNUSED=1 $PHP_BIN -d extension=$GAMESHARK_EXT -S 127.0.0.1:$PORT -t $WP $RUN_DIR/router.php")",
+  "php_server_command": "$(json_escape "GAMESHARK_DSN=sqlite:$UNUSED_DB GAMESHARK_UNUSED=1 $PHP_BIN -d extension=$GAMESHARK_EXT -S 127.0.0.1:$PORT -t $WP $RUN_DIR/router.php")",
   "caveat": "This is an observed runtime coverage profile from this transient php -S run, not proof of dead code."
 }
 JSON
@@ -230,7 +230,7 @@ PHP
 start_server() {
 	local db=$1
 	local log=$2
-	GAMESHARK_DB="$db" \
+	GAMESHARK_DSN="sqlite:$db" \
 	GAMESHARK_UNUSED=1 \
 	GAMESHARK_UNUSED_CAPTURE_QUERY=1 \
 	"$PHP_BIN" -d extension="$GAMESHARK_EXT" \
@@ -268,11 +268,11 @@ stop_server() {
 generate_reports() {
 	mkdir -p "$REPORT_DIR"
 	if [[ -f "$UNUSED_DB" ]]; then
-		GAMESHARK_DB="$UNUSED_DB" "$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -r 'echo gameshark_unused_report();' > "$REPORT_DIR/unused-latest.txt" 2> "$REPORT_DIR/unused-latest.err" || true
-		GAMESHARK_DB="$UNUSED_DB" "$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -r 'echo gameshark_unused_report("json");' > "$REPORT_DIR/unused-latest.json" 2> "$REPORT_DIR/unused-latest-json.err" || true
-		"$PHP_BIN" -d memory_limit=-1 "$ROOT/scripts/wp-unused-aggregate-report.php" "$UNUSED_DB" text > "$REPORT_DIR/unused-aggregate.txt" 2> "$REPORT_DIR/unused-aggregate.err" || true
-		GAMESHARK_COLOR=always "$PHP_BIN" -d memory_limit=-1 "$ROOT/scripts/wp-unused-aggregate-report.php" "$UNUSED_DB" text > "$REPORT_DIR/unused-aggregate-color.txt" 2> "$REPORT_DIR/unused-aggregate-color.err" || true
-		"$PHP_BIN" -d memory_limit=-1 "$ROOT/scripts/wp-unused-aggregate-report.php" "$UNUSED_DB" json > "$REPORT_DIR/unused-aggregate.json" 2> "$REPORT_DIR/unused-aggregate-json.err" || true
+		GAMESHARK_DSN="sqlite:$UNUSED_DB" "$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -r 'echo gameshark_unused_report();' > "$REPORT_DIR/unused-latest.txt" 2> "$REPORT_DIR/unused-latest.err" || true
+		GAMESHARK_DSN="sqlite:$UNUSED_DB" "$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -r 'echo gameshark_unused_report("json");' > "$REPORT_DIR/unused-latest.json" 2> "$REPORT_DIR/unused-latest-json.err" || true
+		"$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -d "gameshark.dsn=sqlite:$UNUSED_DB" "$ROOT/extension/scripts/gameshark-unused-aggregate-report.php" text > "$REPORT_DIR/unused-aggregate.txt" 2> "$REPORT_DIR/unused-aggregate.err" || true
+		GAMESHARK_COLOR=always "$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -d "gameshark.dsn=sqlite:$UNUSED_DB" "$ROOT/extension/scripts/gameshark-unused-aggregate-report.php" text > "$REPORT_DIR/unused-aggregate-color.txt" 2> "$REPORT_DIR/unused-aggregate-color.err" || true
+		"$PHP_BIN" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" -d "gameshark.dsn=sqlite:$UNUSED_DB" "$ROOT/extension/scripts/gameshark-unused-aggregate-report.php" json > "$REPORT_DIR/unused-aggregate.json" 2> "$REPORT_DIR/unused-aggregate-json.err" || true
 	fi
 }
 

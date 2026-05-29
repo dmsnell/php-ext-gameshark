@@ -8,4 +8,4 @@
 	branch = trunk
 [submodule "extension"]
 	path = extension
-	url = ../php-ext-gameshark-extension
+	url = https://github.com/dmsnell/php-ext-gameshark-extension.git

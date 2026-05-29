@@ -141,9 +141,8 @@ Useful helper functions:
 
 Report formats:
 
-- `"text"`: human-readable output. This is the default. Compare, trace, and
-  single-run unused text reports show bounded previews for long sections and
-  state the exact omitted count.
+- `"text"`: human-readable output. This is the default. Text reports list every
+  row and event, so large collections can produce large output.
 - `"array"`: decoded PHP array with the full structured report data.
 - `"json"`: raw JSON with the full structured report data. Fields named
   `preview` are still bounded value previews by design.
@@ -566,12 +565,12 @@ Redis backends:
 GAMESHARK_COLOR=always "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
   -d gameshark.dsn="sqlite:$DB" \
   extension/scripts/gameshark-unused-aggregate-report.php text \
-  > unused-aggregate-color.txt
+  --output=unused-aggregate-color.txt
 
 "$PHP" -d memory_limit=-1 -d extension="$GAMESHARK_EXT" \
   -d gameshark.dsn="sqlite:$DB" \
   extension/scripts/gameshark-unused-aggregate-report.php json \
-  > unused-aggregate.json
+  --output=unused-aggregate.json
 ```
 
 View the colorized full report with:
@@ -580,10 +579,12 @@ View the colorized full report with:
 less -R unused-aggregate-color.txt
 ```
 
-Aggregate text, JSON, and array reports list all rows returned by the selected
-backend and run range; they do not use the single-run text preview cap. Large
-databases can take time to report, so run aggregate reporting outside the
-request path.
+Text, JSON, and array reports list all rows returned by the selected backend
+and run range; text reports do not cap rows or events. Large databases can take
+time to report, so run aggregate reporting outside the request path. The helper
+supports `--output=/path/to/report` to write the complete report directly to a
+file and warns when a large complete report is printed to an interactive
+terminal.
 
 ### Production sampling walkthrough
 
@@ -755,12 +756,19 @@ GAMESHARK_MYSQL_PORT=3306
 GAMESHARK_MYSQL_DATABASE=gameshark
 GAMESHARK_MYSQL_USERNAME=gameshark
 GAMESHARK_MYSQL_PASSWORD_FILE=/run/secrets/gameshark-db-password
+GAMESHARK_MYSQL_SSL_MODE=required
 GAMESHARK_MYSQL_SCHEMA_MODE=validate
+GAMESHARK_MYSQL_CONNECT_TIMEOUT_MS=1000
+GAMESHARK_MYSQL_OPERATION_TIMEOUT_MS=5000
+GAMESHARK_MYSQL_REPORT_TIMEOUT_MS=10000
 ```
 
 `schema_mode=validate` is the default. Use `schema_mode=auto` only for a
 disposable Gameshark-owned database. Do not point Gameshark at a shared
-WordPress database.
+WordPress database. `ssl_mode` accepts `disabled`, `required`, or
+`verify_identity`; it can also be supplied as `?ssl_mode=required` in a MySQL
+DSN. `required` and `verify_identity` enable TLS through the Rust MySQL driver.
+Timeouts are integer milliseconds from `1` to `60000`.
 
 Minimal schema:
 
@@ -836,12 +844,17 @@ GAMESHARK_STORAGE=redis
 GAMESHARK_DSN='redis://redis.example.test:6379/4'
 GAMESHARK_REDIS_KEY_PREFIX=gameshark:wp
 GAMESHARK_REDIS_TTL=3600
+GAMESHARK_REDIS_CONNECT_TIMEOUT_MS=500
+GAMESHARK_REDIS_OPERATION_TIMEOUT_MS=2000
+GAMESHARK_REDIS_REPORT_TIMEOUT_MS=10000
 ```
 
 `rediss://` is accepted by builds compiled with `GAMESHARK_BACKENDS=all`.
 Redis Cluster and Redis Unix sockets are not supported in this version.
 Aggregate reports surface a caveat if Redis indexes reference expired payloads;
-use MySQL/MariaDB for durable multi-host sampling.
+use MySQL/MariaDB for durable multi-host sampling. Redis connect, operation,
+and report timeout settings are applied to connection establishment plus read
+and write operations.
 
 ## Configuration Reference
 
@@ -861,8 +874,8 @@ Environment variables:
 | `GAMESHARK_INVARIANTS_WARN_BUILTINS` | Set to `0` to suppress built-in hook warnings. |
 | `GAMESHARK_UNUSED` | Enables unused runtime coverage mode when truthy. |
 | `GAMESHARK_UNUSED_CAPTURE_QUERY` | Set to `1` to store full request URI and query string. |
-| `GAMESHARK_MYSQL_*` | Split MySQL settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `SOCKET`, `SSL_MODE`, `SCHEMA_MODE`, and timeout keys. |
-| `GAMESHARK_REDIS_*` | Split Redis settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `KEY_PREFIX`, `TTL`, and timeout keys. |
+| `GAMESHARK_MYSQL_*` | Split MySQL settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `SOCKET`, `SSL_MODE`, `SCHEMA_MODE`, `CONNECT_TIMEOUT_MS`, `OPERATION_TIMEOUT_MS`, and `REPORT_TIMEOUT_MS`. |
+| `GAMESHARK_REDIS_*` | Split Redis settings: `HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD`, `PASSWORD_FILE`, `KEY_PREFIX`, `TTL`, `CONNECT_TIMEOUT_MS`, `OPERATION_TIMEOUT_MS`, and `REPORT_TIMEOUT_MS`. |
 
 INI settings:
 

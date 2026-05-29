@@ -141,17 +141,20 @@ Useful helper functions:
 
 Report formats:
 
-- `"text"`: human-readable output. This is the default.
-- `"array"`: decoded PHP array.
-- `"json"`: raw JSON without human-report truncation.
+- `"text"`: human-readable output. This is the default. Compare, trace, and
+  single-run unused text reports show bounded previews for long sections and
+  state the exact omitted count.
+- `"array"`: decoded PHP array with the full structured report data.
+- `"json"`: raw JSON with the full structured report data. Fields named
+  `preview` are still bounded value previews by design.
 
 Color control for text reports:
 
 ```sh
 GAMESHARK_COLOR=always  # force ANSI color
 GAMESHARK_COLOR=never   # disable ANSI color
-GAMESHARK_COLOR=auto    # default behavior; color only for interactive output
-NO_COLOR=1              # disables color unless GAMESHARK_COLOR is set
+GAMESHARK_COLOR=auto    # default behavior; honor NO_COLOR, then TTY detection
+NO_COLOR=1              # disables auto color; GAMESHARK_COLOR=always overrides
 ```
 
 ## Differential Mode
@@ -577,9 +580,10 @@ View the colorized full report with:
 less -R unused-aggregate-color.txt
 ```
 
-The aggregate text and JSON reports are complete; they do not cap each section
-to a preview size. Large databases can take time to report, so run aggregate
-reporting outside the request path.
+Aggregate text, JSON, and array reports list all rows returned by the selected
+backend and run range; they do not use the single-run text preview cap. Large
+databases can take time to report, so run aggregate reporting outside the
+request path.
 
 ### Production sampling walkthrough
 
@@ -709,6 +713,9 @@ GAMESHARK_CAPTURE=default
 `gameshark.capture`/`GAMESHARK_CAPTURE` names a sampling stream. It must match
 `[A-Za-z0-9_.:-]{1,128}`. Reuse the same capture name for related production
 samples so successive requests merge into the same probabilistic coverage view.
+For SQLite, the database file is the capture namespace and aggregate reports do
+not apply capture filtering. MySQL/MariaDB and Redis apply capture filtering in
+their aggregate report queries.
 
 Storage precedence is:
 
@@ -716,13 +723,18 @@ Storage precedence is:
 - `gameshark.dsn`/`GAMESHARK_DSN` beats split host/user/password fields.
 - `password_file` beats split password when no password is present in the DSN.
 
-Inspect the active interpretation with:
+Inspect the parsed configuration with:
 
 ```sh
 "$PHP" -d extension="$GAMESHARK_EXT" \
   -d gameshark.dsn="sqlite:/tmp/gameshark.sqlite" \
   -r 'var_export(gameshark_storage_status());'
 ```
+
+`gameshark_storage_status()` is not a live backend health check. It reports how
+configuration was parsed, whether the schema was checked, and any parsed config
+error; `schema.status` and `connection.status` remain `not_checked` unless a
+specific report or collection path performs backend work.
 
 ### MySQL/MariaDB
 
@@ -828,6 +840,8 @@ GAMESHARK_REDIS_TTL=3600
 
 `rediss://` is accepted by builds compiled with `GAMESHARK_BACKENDS=all`.
 Redis Cluster and Redis Unix sockets are not supported in this version.
+Aggregate reports surface a caveat if Redis indexes reference expired payloads;
+use MySQL/MariaDB for durable multi-host sampling.
 
 ## Configuration Reference
 
